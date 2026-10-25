@@ -14,11 +14,12 @@ fs.mkdirSync(dataDir, { recursive: true });
 function loadDb() { try { return JSON.parse(fs.readFileSync(dbFile, 'utf8')); } catch { return { users: {} }; } }
 function saveDb(db) { fs.writeFileSync(dbFile, JSON.stringify(db, null, 2), { mode: 0o600 }); }
 function normalizeUsername(value) { return String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('pt-BR'); }
+function initialProgress() { return { xp: 0, levelBase: 1, streak: 0, record: 0, lastStudy: null, completedDaily: [], completedWeekly: [], history: [], areaXp: { 'Álgebra': 0, 'Geometria': 0, 'Cálculo': 0, 'Probabilidade': 0 }, badges: [], sessions: [] }; }
 function json(res, status, data, extra = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra }); res.end(JSON.stringify(data)); }
 function readBody(req) { return new Promise((resolve, reject) => { let body = ''; req.on('data', chunk => { body += chunk; if (body.length > 16_384) { reject(new Error('Corpo muito grande')); req.destroy(); } }); req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch { reject(new Error('JSON inválido')); } }); req.on('error', reject); }); }
 function tokenFrom(req) { const cookie = req.headers.cookie || ''; const item = cookie.split(';').map(s => s.trim()).find(s => s.startsWith('mathrpg_session=')); return item ? decodeURIComponent(item.split('=').slice(1).join('=')) : ''; }
 function accountFor(req, db) { const token = tokenFrom(req); const name = sessions.get(token); const user = name && db.users[name]; return user && user.active ? { token, name, user } : null; }
-function publicUser(name, user) { return { username: user.username, role: user.role, active: user.active, xp: user.progress?.xp || 0, level: Math.floor((user.progress?.xp || 0) / 200) + 2 }; }
+function publicUser(name, user) { const xp = user.progress?.xp || 0; return { username: user.username, role: user.role, active: user.active, xp, level: (user.progress?.levelBase || 1) + Math.floor(xp / 200) }; }
 function sessionCookie(token) { return `mathrpg_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800`; }
 function startSession(name, res) { const token = crypto.randomBytes(32).toString('hex'); sessions.set(token, name); res.setHeader('Set-Cookie', sessionCookie(token)); }
 function clearSession(req, res) { const token = tokenFrom(req); sessions.delete(token); res.setHeader('Set-Cookie', 'mathrpg_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'); }
@@ -34,8 +35,8 @@ async function handleApi(req, res, url) {
     const currentDb = loadDb(); if (currentDb.users[key]) return json(res, 409, { error: 'Esse nome de usuário já está em uso.' });
     Object.assign(db, currentDb);
     const role = Object.keys(db.users).length === 0 ? 'admin' : 'student';
-    db.users[key] = { username, role, active: true, salt, passwordHash: passwordHash.toString('hex'), createdAt: new Date().toISOString(), progress: null };
-    saveDb(db); startSession(key, res); return json(res, 201, { user: publicUser(key, db.users[key]), progress: null });
+    db.users[key] = { username, role, active: true, salt, passwordHash: passwordHash.toString('hex'), createdAt: new Date().toISOString(), progress: initialProgress() };
+    saveDb(db); startSession(key, res); return json(res, 201, { user: publicUser(key, db.users[key]), progress: db.users[key].progress });
   }
   if (url.pathname === '/api/login' && req.method === 'POST') {
     const body = await readBody(req); const key = normalizeUsername(body.username); const password = String(body.password || ''); const user = db.users[key];
