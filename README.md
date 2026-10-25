@@ -1,6 +1,6 @@
 # MathRPG
 
-Aplicativo local de aprendizagem de matemática com missões, áreas de estudo e atividades interativas.
+Aplicativo local de aprendizagem de matemática com missões, áreas de estudo, módulos e atividades interativas. Inclui contas individuais, pontuação separada por usuário e painel administrativo para controle de acesso.
 
 ## Executar
 
@@ -10,11 +10,12 @@ Com Node.js instalado, na pasta do projeto:
 node server.js
 ```
 
-Abra `http://localhost:8766` no navegador. O progresso é salvo no armazenamento local do navegador.
+Abra `http://localhost:8766` no navegador e crie a primeira conta. A primeira conta recebe o perfil de administrador; as contas seguintes são estudantes. O administrador pode consultar a pontuação de cada usuário e ativar ou desativar o acesso. Cada progresso é gravado no servidor em `data/users.json`; as senhas são armazenadas como hashes.
 
 ## Arquivos
 
 - `index.html`: interface do aplicativo.
 - `styles.css`: estilos e layout responsivo.
 - `app.js`: atividades, correção, progresso, XP e relatórios.
-- `server.js`: servidor local para servir o aplicativo.
+- `server.js`: servidor local, autenticação e API de progresso/controle de acesso.
+- `data/users.json`: banco local de contas e progresso, criado na primeira execução.
