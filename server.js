@@ -19,7 +19,7 @@ function json(res, status, data, extra = {}) { res.writeHead(status, { 'Content-
 function readBody(req) { return new Promise((resolve, reject) => { let body = ''; req.on('data', chunk => { body += chunk; if (body.length > 16_384) { reject(new Error('Corpo muito grande')); req.destroy(); } }); req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch { reject(new Error('JSON inválido')); } }); req.on('error', reject); }); }
 function tokenFrom(req) { const cookie = req.headers.cookie || ''; const item = cookie.split(';').map(s => s.trim()).find(s => s.startsWith('mathrpg_session=')); return item ? decodeURIComponent(item.split('=').slice(1).join('=')) : ''; }
 function accountFor(req, db) { const token = tokenFrom(req); const name = sessions.get(token); const user = name && db.users[name]; return user && user.active ? { token, name, user } : null; }
-function publicUser(name, user) { const xp = user.progress?.xp || 0; return { username: user.username, role: user.role, active: user.active, xp, level: (user.progress?.levelBase || 1) + Math.floor(xp / 200) }; }
+function publicUser(name, user) { const xp = user.progress?.xp || 0; const accessApproved = user.accessApproved ?? true; return { username: user.username, role: user.role, active: user.active, accessApproved, xp, level: (user.progress?.levelBase || 1) + Math.floor(xp / 200) }; }
 function sessionCookie(token) { return `mathrpg_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800`; }
 function startSession(name, res) { const token = crypto.randomBytes(32).toString('hex'); sessions.set(token, name); res.setHeader('Set-Cookie', sessionCookie(token)); }
 function clearSession(req, res) { const token = tokenFrom(req); sessions.delete(token); res.setHeader('Set-Cookie', 'mathrpg_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'); }
@@ -35,14 +35,18 @@ async function handleApi(req, res, url) {
     const currentDb = loadDb(); if (currentDb.users[key]) return json(res, 409, { error: 'Esse nome de usuário já está em uso.' });
     Object.assign(db, currentDb);
     const role = Object.keys(db.users).length === 0 ? 'admin' : 'student';
-    db.users[key] = { username, role, active: true, salt, passwordHash: passwordHash.toString('hex'), createdAt: new Date().toISOString(), progress: initialProgress() };
-    saveDb(db); startSession(key, res); return json(res, 201, { user: publicUser(key, db.users[key]), progress: db.users[key].progress });
+    const isFirstAccount = role === 'admin';
+    db.users[key] = { username, role, active: isFirstAccount, accessApproved: isFirstAccount, salt, passwordHash: passwordHash.toString('hex'), createdAt: new Date().toISOString(), progress: initialProgress() };
+    saveDb(db);
+    if (!isFirstAccount) return json(res, 201, { pendingApproval: true });
+    startSession(key, res); return json(res, 201, { user: publicUser(key, db.users[key]), progress: db.users[key].progress });
   }
   if (url.pathname === '/api/login' && req.method === 'POST') {
     const body = await readBody(req); const key = normalizeUsername(body.username); const password = String(body.password || ''); const user = db.users[key];
-    if (!user || !user.active) return json(res, 401, { error: 'Usuário ou senha incorretos, ou acesso desativado.' });
+    if (!user) return json(res, 401, { error: 'Usu\u00e1rio ou senha incorretos.' });
     const attempted = await scrypt(password, user.salt, 64);
     if (!safeEqual(attempted.toString('hex'), user.passwordHash)) return json(res, 401, { error: 'Usuário ou senha incorretos, ou acesso desativado.' });
+    if (!user.active) return json(res, 403, { error: user.accessApproved === false ? 'Conta aguardando aprova\u00e7\u00e3o do administrador.' : 'Acesso desativado. Consulte o administrador.' });
     startSession(key, res); return json(res, 200, { user: publicUser(key, user), progress: user.progress || null });
   }
   const account = accountFor(req, db);
@@ -62,14 +66,34 @@ async function handleApi(req, res, url) {
     const users = Object.entries(db.users).map(([name, user]) => ({ key: name, ...publicUser(name, user), createdAt: user.createdAt })).sort((a, b) => a.username.localeCompare(b.username, 'pt-BR'));
     return json(res, 200, { users });
   }
+  if (url.pathname === '/api/admin/reports' && req.method === 'GET') {
+    if (account.user.role !== 'admin') return json(res, 403, { error: 'Admin access required.' });
+    const reports = Object.entries(db.users).map(([key, user]) => ({ key, username: user.username, progress: user.progress || initialProgress() })).sort((a, b) => a.username.localeCompare(b.username, 'pt-BR'));
+    return json(res, 200, { reports });
+  }
   const match = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+  if (match && req.method === 'DELETE') {
+    if (account.user.role !== 'admin') return json(res, 403, { error: 'Admin access required.' });
+    const key = normalizeUsername(decodeURIComponent(match[1]));
+    const target = db.users[key];
+    if (!target) return json(res, 404, { error: 'Conta nao encontrada.' });
+    if (key === account.name) return json(res, 400, { error: 'Nao e permitido excluir a propria conta.' });
+    if (target.role === 'admin' && Object.values(db.users).filter(user => user.role === 'admin').length <= 1) return json(res, 409, { error: 'Nao e permitido excluir o ultimo administrador.' });
+    delete db.users[key];
+    saveDb(db);
+    for (const [token, name] of sessions) if (name === key) sessions.delete(token);
+    return json(res, 200, { ok: true });
+  }
   if (match && req.method === 'PATCH') {
     if (account.user.role !== 'admin') return json(res, 403, { error: 'Apenas administradores podem gerenciar usuários.' });
     const key = normalizeUsername(decodeURIComponent(match[1])); const body = await readBody(req); const target = db.users[key];
     if (!target) return json(res, 404, { error: 'Usuário não encontrado.' });
     if (key === account.name && body.active === false) return json(res, 400, { error: 'Não é possível desativar a própria conta.' });
     if (typeof body.active !== 'boolean') return json(res, 400, { error: 'Informe o estado de acesso.' });
-    target.active = body.active; saveDb(db);
+    target.active = body.active;
+    if (body.active) target.accessApproved = true;
+    else if (target.accessApproved === undefined) target.accessApproved = true;
+    saveDb(db);
     if (!target.active) for (const [token, name] of sessions) if (name === key) sessions.delete(token);
     return json(res, 200, { user: publicUser(key, target) });
   }

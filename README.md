@@ -10,7 +10,7 @@ Com Node.js instalado, na pasta do projeto:
 node server.js
 ```
 
-Abra `http://localhost:8766` no navegador e crie a primeira conta. A primeira conta recebe o perfil de administrador; as contas seguintes são estudantes. O administrador pode consultar a pontuação de cada usuário e ativar ou desativar o acesso. Cada progresso é gravado no servidor em `data/users.json`; as senhas são armazenadas como hashes.
+Abra `http://localhost:8766` no navegador e crie a primeira conta. A primeira conta recebe o perfil de administrador; as contas seguintes são estudantes e ficam pendentes até aprovação. No painel de acompanhamento, o administrador consulta o progresso, libera ou desativa acessos e pode excluir contas. Cada progresso é gravado no servidor em `data/users.json`; as senhas são armazenadas como hashes.
 
 ## Arquivos
 
